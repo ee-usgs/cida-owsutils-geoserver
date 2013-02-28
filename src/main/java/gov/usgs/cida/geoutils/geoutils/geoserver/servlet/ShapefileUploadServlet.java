@@ -1,6 +1,6 @@
 package gov.usgs.cida.geoutils.geoutils.geoserver.servlet;
 
-import gov.usgs.cida.geoutils.geoutils.commons.FileHelper;
+import gov.usgs.cida.owsutils.commons.FileHelper;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -34,10 +34,6 @@ import org.apache.http.util.EntityUtils;
 public class ShapefileUploadServlet extends HttpServlet {
 
     private static final long serialVersionUID = 1L;
-    private static final String SUFFIX_SHP = ".shp";
-    private static final String SUFFIX_SHX = ".shx";
-    private static final String SUFFIX_PRJ = ".prj";
-    private static final String SUFFIX_DBF = ".dbf";
     private static Integer maxFileSize;
     private static String filenameParam;
 
@@ -85,19 +81,15 @@ public class ShapefileUploadServlet extends HttpServlet {
 
         File tempFile = new File(tempDir + File.separator + filename);
         try {
-            safeFileFromRequest(request, tempFile, filenameParam);
-        } catch (FileUploadException ex) {
-            Logger.getLogger(ShapefileUploadServlet.class.getName()).log(Level.SEVERE, null, ex);
-        } catch (IOException ex) {
-            Logger.getLogger(ShapefileUploadServlet.class.getName()).log(Level.SEVERE, null, ex);
-        }
-
-        try {
-            if (!FileHelper.validateShapeZIP(tempFile)) {
-                throw new IOException();
+            saveFileFromRequest(request, tempFile, filenameParam);
+            if (!FileHelper.validateShapefileZip(tempFile)) {
+                throw new IOException("Unable to verify shapefile. Upload failed.");
             }
+        } catch (FileUploadException ex) {
+            sendErrorResponse(response, ex.getMessage());
+            return;
         } catch (IOException ex) {
-            sendErrorResponse(response, "Unable to verify shapefile. Upload failed");
+            sendErrorResponse(response, ex.getMessage());
             return;
         }
 
@@ -119,7 +111,16 @@ public class ShapefileUploadServlet extends HttpServlet {
         sendResponse(response, responseText);
     }
 
-    public static void safeFileFromRequest(HttpServletRequest request, File destinationFile, String fileParam) throws FileUploadException, IOException {
+    /**
+     * Takes a HttpServletRequest, parses it for a specific parameter that represents a file and saves the file as denoted by a File object
+     * 
+     * @param request
+     * @param destinationFile 
+     * @param fileParam
+     * @throws FileUploadException
+     * @throws IOException 
+     */
+    public static void saveFileFromRequest(HttpServletRequest request, File destinationFile, String fileParam) throws FileUploadException, IOException {
         // Handle form-based upload (from IE)
         if (ServletFileUpload.isMultipartContent(request)) {
             FileItemFactory factory = new DiskFileItemFactory();

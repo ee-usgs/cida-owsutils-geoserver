@@ -6,7 +6,10 @@ import gov.usgs.cida.owsutils.commons.io.FileHelper;
 import gov.usgs.cida.owsutils.commons.properties.JNDISingleton;
 import it.geosolutions.geoserver.rest.GeoServerRESTManager;
 import it.geosolutions.geoserver.rest.GeoServerRESTPublisher;
+import it.geosolutions.geoserver.rest.GeoServerRESTPublisher.UploadMethod;
 import it.geosolutions.geoserver.rest.GeoServerRESTReader;
+import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder;
+import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder.ProjectionPolicy;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -17,7 +20,6 @@ import java.util.Map;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.*;
-import org.apache.commons.fileupload.FileUploadException;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang.StringUtils;
 import org.slf4j.LoggerFactory;
@@ -34,10 +36,11 @@ public class ShapefileUploadServlet extends HttpServlet {
     private static String geoserverUsername;
     private static String geoserverPassword;
     private static GeoServerRESTManager gsRestManager;
+    
+    // Defaults
     private static String defaultWorkspaceName;
     private static String defaultStoreName;
     private static String defaultSRS;
-    // Defaults
     private static String defaultFilenameParam = "qqfile"; // Legacy to handle jquery fineuploader
     private static Integer defaultMaxFileSize = Integer.MAX_VALUE;
 
@@ -148,8 +151,6 @@ public class ShapefileUploadServlet extends HttpServlet {
             LOG.warn("Default SRS is not defined. If a SRS name is not passed to during the request, the request will fail;");
         }
         LOG.trace("Default SRS set to: " + defaultSRS);
-
-
     }
 
     @Override
@@ -236,13 +237,7 @@ public class ShapefileUploadServlet extends HttpServlet {
                 throw new IOException("Unable to verify shapefile. Upload failed.");
             }
             LOG.trace("Zip file seems to be a valid shapefile");
-        } catch (FileUploadException ex) {
-            LOG.warn(ex.getMessage());
-            responseMap.put("error", "Unable to upload file");
-            responseMap.put("exception", ex.getMessage());
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
-            return;
-        } catch (IOException ex) {
+        } catch (Exception ex) {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
             responseMap.put("exception", ex.getMessage());
@@ -252,8 +247,41 @@ public class ShapefileUploadServlet extends HttpServlet {
 
         try {
             GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
-            GeoServerRESTReader gsReader = gsRestManager.getReader();
-            Boolean success = gsPublisher.publishShp(workspaceName, storeName, layerName, shapeZipFile, srsName);
+            
+//            // Do EPSG processing
+//        String declaredCRS = null;
+//        String nativeCRS = null;
+//        String warning = "";
+//        try {
+//            nativeCRS = new String(FileHelper.getByteArrayFromFile(new File(renamedPrjPath)));
+//            if (nativeCRS == null || nativeCRS.isEmpty()) {
+//                String errorMessage = "Error while getting Prj/WKT information from PRJ file. Function halted.";
+//                LOGGER.error(errorMessage);
+//                addError(errorMessage);
+//                throw new RuntimeException(errorMessage);
+//            }
+//            // The behavior of this method requires that the layer always force
+//            // projection from native to declared...
+//            declaredCRS = ShapeFileEPSGHelper.getDeclaredEPSGFromWKT(nativeCRS, false);
+//            if (declaredCRS == null || declaredCRS.isEmpty()) {
+//                declaredCRS = ShapeFileEPSGHelper.getDeclaredEPSGFromWKT(nativeCRS, true);
+//                warning = "Could not find EPSG code for prj definition. The geographic coordinate system '" + declaredCRS + "' will be used";
+//            } else if (declaredCRS.startsWith("ESRI:")) {
+//                declaredCRS = declaredCRS.replaceFirst("ESRI:", "EPSG:");
+//            }
+//            if (declaredCRS == null || declaredCRS.isEmpty()) {
+//                throw new RuntimeException("Could not attain EPSG code from shapefile. Please ensure proper projection and a valid PRJ file.");
+//            }
+//        } catch (Exception ex) {
+//            String errorMessage = "Error while getting EPSG information from PRJ file. Function halted.";
+//            LOGGER.error(errorMessage, ex);
+//            addError(errorMessage);
+//            throw new RuntimeException(errorMessage, ex);
+//        }
+            
+            // Currently not doing any checks to see if workspace, store or layer already exist
+            Boolean success = gsPublisher.publishShp(workspaceName, storeName, null, layerName, UploadMethod.FILE, shapeZipFile.toURI(), srsName, "nativeSRS", ProjectionPolicy.NONE, null);
+            
             if (success) {
                 LOG.debug("Shapefile has been imported successfully");
                 RequestResponseHelper.sendSuccessResponse(response, responseMap, responseType);

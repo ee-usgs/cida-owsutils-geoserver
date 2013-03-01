@@ -1,24 +1,19 @@
 package gov.usgs.cida.geoutils.geoutils.geoserver.servlet;
 
-import gov.usgs.cida.owsutils.commons.FileHelper;
+import gov.usgs.cida.owsutils.commons.communication.RequestResponseHelper;
+import gov.usgs.cida.owsutils.commons.io.FileHelper;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.Writer;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import java.util.HashMap;
+import java.util.Map;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.*;
 import org.apache.commons.codec.binary.Base64OutputStream;
-import org.apache.commons.fileupload.FileItemFactory;
-import org.apache.commons.fileupload.FileItemIterator;
-import org.apache.commons.fileupload.FileItemStream;
 import org.apache.commons.fileupload.FileUploadException;
-import org.apache.commons.fileupload.disk.DiskFileItemFactory;
-import org.apache.commons.fileupload.servlet.ServletFileUpload;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringEscapeUtils;
@@ -30,9 +25,11 @@ import org.apache.http.entity.AbstractHttpEntity;
 import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.util.EntityUtils;
+import org.slf4j.LoggerFactory;
 
 public class ShapefileUploadServlet extends HttpServlet {
 
+    private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(ShapefileUploadServlet.class);
     private static final long serialVersionUID = 1L;
     private static Integer maxFileSize;
     private static String filenameParam;
@@ -68,96 +65,69 @@ public class ShapefileUploadServlet extends HttpServlet {
 
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, FileNotFoundException {
+        Map<String, String> responseMap = new HashMap<String, String>();
         int fileSize = Integer.parseInt(request.getHeader("Content-Length"));
         if (fileSize > maxFileSize) {
-            sendErrorResponse(response, "Upload exceeds max file size of " + maxFileSize + " bytes");
+            responseMap.put("error", "Upload exceeds max file size of " + maxFileSize + " bytes");
+            RequestResponseHelper.sendErrorResponse(response, responseMap, RequestResponseHelper.ResponseType.XML);
             return;
         }
-
+        
         String filename = request.getParameter(filenameParam);
+        String responseEncoding = request.getParameter("response-encoding");
         String utilityWpsUrl = request.getParameter("utilitywps");
         String wfsEndpoint = request.getParameter("wfs-url");
         String tempDir = System.getProperty("java.io.tmpdir");
-
         File tempFile = new File(tempDir + File.separator + filename);
+        
+        RequestResponseHelper.ResponseType responseType = RequestResponseHelper.ResponseType.XML;
+        
+        if(StringUtils.isBlank(responseEncoding) || responseEncoding.toLowerCase().contains("json")) {
+           responseType = RequestResponseHelper.ResponseType.JSON;
+        }
+        LOG.trace("Response type set to " + responseType.toString());
+        
         try {
-            saveFileFromRequest(request, tempFile, filenameParam);
+            RequestResponseHelper.saveFileFromRequest(request, tempFile, filenameParam);
+            LOG.trace("File saved to " + tempFile.getPath());
+            
+            FileHelper.flattenZipFile(tempFile.getPath());
+            LOG.trace("Zip file directory structure flattened");
+            
             if (!FileHelper.validateShapefileZip(tempFile)) {
                 throw new IOException("Unable to verify shapefile. Upload failed.");
             }
+            LOG.trace("Zip file seems to be a valid shapefile");
+            
         } catch (FileUploadException ex) {
-            sendErrorResponse(response, ex.getMessage());
+            LOG.warn(ex.getMessage());
+            responseMap.put("error", "Unable to upload file");
+            responseMap.put("exception", ex.getMessage());
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
             return;
         } catch (IOException ex) {
-            sendErrorResponse(response, ex.getMessage());
+            LOG.warn(ex.getMessage());
+            responseMap.put("error", "Unable to upload file");
+            responseMap.put("exception", ex.getMessage());
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
             return;
         }
 
-        String responseText = null;
         try {
             String wpsResponse = postToWPS(utilityWpsUrl, wfsEndpoint, tempFile);
-
-            responseText = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-                    + "<wpsResponse><![CDATA[" + wpsResponse + "]]></wpsResponse>";
-
+            responseMap.put("wpsResponse", "<![CDATA[" + wpsResponse + "]]>");
         } catch (Exception ex) {
-            Logger.getLogger(ShapefileUploadServlet.class.getName()).log(Level.SEVERE, null, ex);
-            sendErrorResponse(response, "Unable to upload file");
+            LOG.warn(ex.getMessage());
+            responseMap.put("error", "Unable to upload file");
+            responseMap.put("exception", ex.getMessage());
+            RequestResponseHelper.sendErrorResponse(response, responseMap, RequestResponseHelper.ResponseType.XML);
             return;
         } finally {
             FileUtils.deleteQuietly(tempFile);
         }
-
-        sendResponse(response, responseText);
-    }
-
-    /**
-     * Takes a HttpServletRequest, parses it for a specific parameter that represents a file and saves the file as denoted by a File object
-     * 
-     * @param request
-     * @param destinationFile 
-     * @param fileParam
-     * @throws FileUploadException
-     * @throws IOException 
-     */
-    public static void saveFileFromRequest(HttpServletRequest request, File destinationFile, String fileParam) throws FileUploadException, IOException {
-        // Handle form-based upload (from IE)
-        if (ServletFileUpload.isMultipartContent(request)) {
-            FileItemFactory factory = new DiskFileItemFactory();
-            ServletFileUpload upload = new ServletFileUpload(factory);
-
-            // Parse the request
-            FileItemIterator iter;
-            iter = upload.getItemIterator(request);
-            while (iter.hasNext()) {
-                FileItemStream item = iter.next();
-                String name = item.getFieldName();
-                if (fileParam.equalsIgnoreCase(name)) {
-                    FileHelper.saveFileFromRequest(item.openStream(), destinationFile);
-                    break;
-                }
-            }
-        } else {
-            FileHelper.saveFileFromRequest(request.getInputStream(), destinationFile);
-        }
-    }
-
-    public static void sendErrorResponse(HttpServletResponse response, String text) {
-        String errorResponse = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" + "<error>" + text + "</error>";
-        sendResponse(response, errorResponse);
-    }
-
-    public static void sendResponse(HttpServletResponse response, String text) {
-        response.setContentType("text/xml");
-        response.setCharacterEncoding("utf-8");
-
-        try {
-            Writer writer = response.getWriter();
-            writer.write(text);
-            writer.close();
-        } catch (IOException ex) {
-            Logger.getLogger(ShapefileUploadServlet.class.getName()).log(Level.SEVERE, null, ex);
-        }
+        
+        LOG.trace("Shapefile has been imported successfully");
+        RequestResponseHelper.sendSuccessResponse(response, responseMap, RequestResponseHelper.ResponseType.XML);
     }
 
     private String postToWPS(String url, String wfsEndpoint, File uploadedFile) throws IOException {

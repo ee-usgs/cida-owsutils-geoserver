@@ -1,60 +1,154 @@
 package gov.usgs.cida.geoutils.geoutils.geoserver.servlet;
 
+import gov.usgs.cida.config.DynamicReadOnlyProperties;
 import gov.usgs.cida.owsutils.commons.communication.RequestResponseHelper;
 import gov.usgs.cida.owsutils.commons.io.FileHelper;
+import gov.usgs.cida.owsutils.commons.properties.JNDISingleton;
+import it.geosolutions.geoserver.rest.GeoServerRESTManager;
+import it.geosolutions.geoserver.rest.GeoServerRESTPublisher;
+import it.geosolutions.geoserver.rest.GeoServerRESTReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.HashMap;
 import java.util.Map;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.*;
-import org.apache.commons.codec.binary.Base64OutputStream;
 import org.apache.commons.fileupload.FileUploadException;
 import org.apache.commons.io.FileUtils;
-import org.apache.commons.io.IOUtils;
-import org.apache.commons.lang.StringEscapeUtils;
 import org.apache.commons.lang.StringUtils;
-import org.apache.http.HttpResponse;
-import org.apache.http.client.HttpClient;
-import org.apache.http.client.methods.HttpPost;
-import org.apache.http.entity.AbstractHttpEntity;
-import org.apache.http.entity.InputStreamEntity;
-import org.apache.http.impl.client.DefaultHttpClient;
-import org.apache.http.util.EntityUtils;
 import org.slf4j.LoggerFactory;
 
 public class ShapefileUploadServlet extends HttpServlet {
 
-    private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(ShapefileUploadServlet.class);
     private static final long serialVersionUID = 1L;
+    private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(ShapefileUploadServlet.class);
+    private static DynamicReadOnlyProperties props = null;
     private static Integer maxFileSize;
     private static String filenameParam;
+    private static String geoserverEndpoint;
+    private static URL geoserverEndpointURL;
+    private static String geoserverUsername;
+    private static String geoserverPassword;
+    private static GeoServerRESTManager gsRestManager;
+    private static String defaultWorkspaceName;
+    private static String defaultStoreName;
+    private static String defaultSRS;
+    // Defaults
+    private static String defaultFilenameParam = "qqfile"; // Legacy to handle jquery fineuploader
+    private static Integer defaultMaxFileSize = Integer.MAX_VALUE;
 
     @Override
-    public void init(ServletConfig servletConfig) {
-        Integer defaultMaxFileSize = Integer.MAX_VALUE;
-        String defaultFilenameParam = "qqfile";
+    public void init(ServletConfig servletConfig) throws ServletException {
+        super.init();
+        props = JNDISingleton.getInstance();
 
-        String mfsInitParm = servletConfig.getInitParameter("maxFileSize");
-        filenameParam = servletConfig.getInitParameter("filenameParam");
-
-        if (StringUtils.isBlank(mfsInitParm)) {
+        String mfsInitParam = servletConfig.getInitParameter("max-file-size");
+        String mfsJndiProp = props.getProperty("max-file-size", "");
+        if (StringUtils.isNotBlank(mfsInitParam)) {
+            maxFileSize = Integer.parseInt(mfsInitParam);
+        } else if (StringUtils.isNotBlank(mfsJndiProp)) {
+            maxFileSize = Integer.parseInt(mfsJndiProp);
+        } else {
             maxFileSize = defaultMaxFileSize;
         }
+        LOG.trace("Maximum allowable file size set to: " + maxFileSize + " bytes");
 
-        try {
-            maxFileSize = Integer.parseInt(mfsInitParm);
-        } catch (NumberFormatException nfe) {
-            maxFileSize = defaultMaxFileSize;
-        }
-
-        if (StringUtils.isBlank(filenameParam)) {
+        String fnInitParam = servletConfig.getInitParameter("filename-param");
+        String fnJndiProp = props.getProperty("filename-param", "");
+        if (StringUtils.isNotBlank(fnInitParam)) {
+            filenameParam = fnInitParam;
+        } else if (StringUtils.isNotBlank(fnJndiProp)) {
+            filenameParam = fnJndiProp;
+        } else {
             filenameParam = defaultFilenameParam;
         }
+        LOG.trace("Filename parameter set to: " + filenameParam);
+
+        String gsepInitParam = servletConfig.getInitParameter("geoserver-endpoint");
+        String gsepJndiProp = props.getProperty("geoserver-endpoint");
+        if (StringUtils.isNotBlank(gsepInitParam)) {
+            geoserverEndpoint = gsepInitParam;
+        } else if (StringUtils.isNotBlank(gsepJndiProp)) {
+            geoserverEndpoint = gsepJndiProp;
+        } else {
+            throw new ServletException("Geoserver endpoint is not defined.");
+        }
+        LOG.trace("Geoserver endpoint set to: " + geoserverEndpoint);
+
+        try {
+            geoserverEndpointURL = new URL(geoserverEndpoint);
+        } catch (MalformedURLException ex) {
+            throw new ServletException("Geoserver endpoint (" + geoserverEndpoint + ") could not be parsed into a valid URL.");
+        }
+
+        String gsuserInitParam = servletConfig.getInitParameter("geoserver-username");
+        String gsuserJndiProp = props.getProperty("geoserver-username");
+        if (StringUtils.isNotBlank(gsuserInitParam)) {
+            geoserverUsername = gsepInitParam;
+        } else if (StringUtils.isNotBlank(gsuserJndiProp)) {
+            geoserverUsername = gsepJndiProp;
+        } else {
+            throw new ServletException("Geoserver username is not defined.");
+        }
+        LOG.trace("Geoserver username set to: " + geoserverUsername);
+
+        String gspassJndiProp = props.getProperty("geoserver-password");
+        if (StringUtils.isNotBlank(gspassJndiProp)) {
+            geoserverPassword = gsepJndiProp;
+        } else {
+            throw new ServletException("Geoserver password is not defined.");
+        }
+        LOG.trace("Geoserver password is set");
+
+        try {
+            gsRestManager = new GeoServerRESTManager(geoserverEndpointURL, geoserverUsername, geoserverPassword);
+        } catch (IllegalArgumentException ex) {
+            throw new ServletException("Geoserver manager count not be built", ex);
+        } catch (MalformedURLException ex) {
+            // This should not happen since we take care of it above - we can probably move this into the try block above
+            throw new ServletException("Geoserver endpoint (" + geoserverEndpoint + ") could not be parsed into a valid URL.");
+        }
+
+        String dwInitParam = servletConfig.getInitParameter("geoserver-default-workspace");
+        String dwJndiProp = props.getProperty("geoserver-default-workspace");
+        if (StringUtils.isNotBlank(dwInitParam)) {
+            defaultWorkspaceName = dwInitParam;
+        } else if (StringUtils.isNotBlank(dwJndiProp)) {
+            defaultWorkspaceName = dwInitParam;
+        } else {
+            defaultWorkspaceName = "";
+            LOG.warn("Default workspace is not defined. If a workspace is not passed to during the request, the request will fail;");
+        }
+        LOG.trace("Default workspace set to: " + defaultWorkspaceName);
+
+        String dsnInitParam = servletConfig.getInitParameter("geoserver-default-storename");
+        String dsnJndiProp = props.getProperty("geoserver-default-storename");
+        if (StringUtils.isNotBlank(dsnInitParam)) {
+            defaultStoreName = dwInitParam;
+        } else if (StringUtils.isNotBlank(dsnJndiProp)) {
+            defaultStoreName = dwInitParam;
+        } else {
+            defaultStoreName = "";
+            LOG.warn("Default store name is not defined. If a store name is not passed to during the request, the request will fail;");
+        }
+        LOG.trace("Default store name set to: " + defaultStoreName);
+
+        String dsrsInitParam = servletConfig.getInitParameter("geoserver-default-srs");
+        String dsrsJndiProp = props.getProperty("geoserver-default-srs");
+        if (StringUtils.isNotBlank(dsrsInitParam)) {
+            defaultSRS = dsrsInitParam;
+        } else if (StringUtils.isNotBlank(dsrsJndiProp)) {
+            defaultSRS = dsrsJndiProp;
+        } else {
+            defaultSRS = "";
+            LOG.warn("Default SRS is not defined. If a SRS name is not passed to during the request, the request will fail;");
+        }
+        LOG.trace("Default SRS set to: " + defaultSRS);
+
 
     }
 
@@ -66,39 +160,82 @@ public class ShapefileUploadServlet extends HttpServlet {
     @Override
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, FileNotFoundException {
         Map<String, String> responseMap = new HashMap<String, String>();
+
+        RequestResponseHelper.ResponseType responseType = RequestResponseHelper.ResponseType.XML;
+        String responseEncoding = request.getParameter("response-encoding");
+        if (StringUtils.isBlank(responseEncoding) || responseEncoding.toLowerCase().contains("json")) {
+            responseType = RequestResponseHelper.ResponseType.JSON;
+        }
+        LOG.trace("Response type set to " + responseType.toString());
+
         int fileSize = Integer.parseInt(request.getHeader("Content-Length"));
         if (fileSize > maxFileSize) {
             responseMap.put("error", "Upload exceeds max file size of " + maxFileSize + " bytes");
-            RequestResponseHelper.sendErrorResponse(response, responseMap, RequestResponseHelper.ResponseType.XML);
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
             return;
         }
-        
-        String filename = request.getParameter(filenameParam);
-        String responseEncoding = request.getParameter("response-encoding");
-        String utilityWpsUrl = request.getParameter("utilitywps");
-        String wfsEndpoint = request.getParameter("wfs-url");
-        String tempDir = System.getProperty("java.io.tmpdir");
-        File tempFile = new File(tempDir + File.separator + filename);
-        
-        RequestResponseHelper.ResponseType responseType = RequestResponseHelper.ResponseType.XML;
-        
-        if(StringUtils.isBlank(responseEncoding) || responseEncoding.toLowerCase().contains("json")) {
-           responseType = RequestResponseHelper.ResponseType.JSON;
+
+        if (!StringUtils.isBlank(request.getParameter("filename-param"))) {
+            filenameParam = request.getParameter("filename-param");
+            LOG.trace("Based on incoming request, filename parameter re-set to: " + filenameParam);
         }
-        LOG.trace("Response type set to " + responseType.toString());
+
+        String filename = request.getParameter(filenameParam);
+        String tempDir = System.getProperty("java.io.tmpdir");
+        File shapeZipFile = new File(tempDir + File.separator + filename);
+        LOG.trace("Temporary file set to " + shapeZipFile.getPath());
+
+        String workspaceName = request.getParameter("workspace");
+        if (StringUtils.isBlank(workspaceName)) {
+            workspaceName = defaultWorkspaceName;
+        }
+        if (StringUtils.isBlank(workspaceName)) {
+            responseMap.put("error", "Parameter \"workspace\" is mandatory");
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            return;
+        }
+        LOG.trace("Workspace name set to " + workspaceName);
+
+        String storeName = request.getParameter("store");
+        if (StringUtils.isBlank(storeName)) {
+            storeName = defaultStoreName;
+        }
+        if (StringUtils.isBlank(storeName)) {
+            responseMap.put("error", "Parameter \"store\" is mandatory");
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            return;
+        }
+        LOG.trace("Store name set to " + storeName);
+
+        String srsName = request.getParameter("srs");
+        if (StringUtils.isBlank(srsName)) {
+            srsName = defaultSRS;
+        }
+        if (StringUtils.isBlank(srsName)) {
+            responseMap.put("error", "Parameter \"srs\" is mandatory");
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            return;
+        }
+        LOG.trace("SRS name set to " + srsName);
+        
+        String layerName = request.getParameter("layer");
+        if (StringUtils.isBlank(layerName)) {
+            layerName = filename.split(".")[0];
+        }
+        layerName = layerName.trim().replaceAll("\\.", "_").replaceAll(" ", "_");
+        LOG.trace("Layer name set to " + layerName);
         
         try {
-            RequestResponseHelper.saveFileFromRequest(request, tempFile, filenameParam);
-            LOG.trace("File saved to " + tempFile.getPath());
-            
-            FileHelper.flattenZipFile(tempFile.getPath());
+            RequestResponseHelper.saveFileFromRequest(request, shapeZipFile, filenameParam);
+            LOG.trace("File saved to " + shapeZipFile.getPath());
+
+            FileHelper.flattenZipFile(shapeZipFile.getPath());
             LOG.trace("Zip file directory structure flattened");
-            
-            if (!FileHelper.validateShapefileZip(tempFile)) {
+
+            if (!FileHelper.validateShapefileZip(shapeZipFile)) {
                 throw new IOException("Unable to verify shapefile. Upload failed.");
             }
             LOG.trace("Zip file seems to be a valid shapefile");
-            
         } catch (FileUploadException ex) {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
@@ -114,113 +251,24 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
 
         try {
-            String wpsResponse = postToWPS(utilityWpsUrl, wfsEndpoint, tempFile);
-            responseMap.put("wpsResponse", "<![CDATA[" + wpsResponse + "]]>");
+            GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
+            GeoServerRESTReader gsReader = gsRestManager.getReader();
+            Boolean success = gsPublisher.publishShp(workspaceName, storeName, layerName, shapeZipFile, srsName);
+            if (success) {
+                LOG.debug("Shapefile has been imported successfully");
+                RequestResponseHelper.sendSuccessResponse(response, responseMap, responseType);
+            } else {
+                LOG.debug("Shapefile could not be imported successfully");
+                responseMap.put("error", "Shapefile could not be imported successfully");
+                RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            }
         } catch (Exception ex) {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
             responseMap.put("exception", ex.getMessage());
-            RequestResponseHelper.sendErrorResponse(response, responseMap, RequestResponseHelper.ResponseType.XML);
-            return;
+            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
         } finally {
-            FileUtils.deleteQuietly(tempFile);
+            FileUtils.deleteQuietly(shapeZipFile);
         }
-        
-        LOG.trace("Shapefile has been imported successfully");
-        RequestResponseHelper.sendSuccessResponse(response, responseMap, RequestResponseHelper.ResponseType.XML);
-    }
-
-    private String postToWPS(String url, String wfsEndpoint, File uploadedFile) throws IOException {
-        HttpPost post;
-        HttpClient httpClient = new DefaultHttpClient();
-
-        post = new HttpPost(url);
-
-        File wpsRequestFile = createWPSReceiveFilesXML(uploadedFile, wfsEndpoint);
-        FileInputStream wpsRequestInputStream = null;
-        try {
-            wpsRequestInputStream = new FileInputStream(wpsRequestFile);
-
-            AbstractHttpEntity entity = new InputStreamEntity(wpsRequestInputStream, wpsRequestFile.length());
-
-            post.setEntity(entity);
-
-            HttpResponse response = httpClient.execute(post);
-
-            return EntityUtils.toString(response.getEntity());
-
-        } finally {
-            IOUtils.closeQuietly(wpsRequestInputStream);
-            FileUtils.deleteQuietly(wpsRequestFile);
-        }
-    }
-
-    private static File createWPSReceiveFilesXML(final File uploadedFile, final String wfsEndpoint) throws IOException {
-
-        File wpsRequestFile = null;
-        FileOutputStream wpsRequestOutputStream = null;
-        FileInputStream uploadedInputStream = null;
-
-        try {
-            wpsRequestFile = File.createTempFile("wps.upload.", ".xml");
-            wpsRequestOutputStream = new FileOutputStream(wpsRequestFile);
-            uploadedInputStream = new FileInputStream(uploadedFile);
-
-            wpsRequestOutputStream.write(new String(
-                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-                    + "<wps:Execute service=\"WPS\" version=\"1.0.0\" "
-                    + "xmlns:wps=\"http://www.opengis.net/wps/1.0.0\" "
-                    + "xmlns:ows=\"http://www.opengis.net/ows/1.1\" "
-                    + "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
-                    + "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
-                    + "xsi:schemaLocation=\"http://www.opengis.net/wps/1.0.0 "
-                    + "http://schemas.opengis.net/wps/1.0.0/wpsExecute_request.xsd\">"
-                    + "<ows:Identifier>gov.usgs.cida.gdp.wps.algorithm.filemanagement.ReceiveFiles</ows:Identifier>"
-                    + "<wps:DataInputs>"
-                    + "<wps:Input>"
-                    + "<ows:Identifier>filename</ows:Identifier>"
-                    + "<wps:Data>"
-                    + "<wps:LiteralData>"
-                    + StringEscapeUtils.escapeXml(uploadedFile.getName().replace(".zip", ""))
-                    + "</wps:LiteralData>"
-                    + "</wps:Data>"
-                    + "</wps:Input>"
-                    + "<wps:Input>"
-                    + "<ows:Identifier>wfs-url</ows:Identifier>"
-                    + "<wps:Data>"
-                    + "<wps:LiteralData>"
-                    + StringEscapeUtils.escapeXml(wfsEndpoint)
-                    + "</wps:LiteralData>"
-                    + "</wps:Data>"
-                    + "</wps:Input>"
-                    + "<wps:Input>"
-                    + "<ows:Identifier>file</ows:Identifier>"
-                    + "<wps:Data>"
-                    + "<wps:ComplexData mimeType=\"application/x-zipped-shp\" encoding=\"Base64\">").getBytes());
-            IOUtils.copy(uploadedInputStream, new Base64OutputStream(wpsRequestOutputStream, true, 0, null));
-            wpsRequestOutputStream.write(new String(
-                    "</wps:ComplexData>"
-                    + "</wps:Data>"
-                    + "</wps:Input>"
-                    + "</wps:DataInputs>"
-                    + "<wps:ResponseForm>"
-                    + "<wps:ResponseDocument>"
-                    + "<wps:Output>"
-                    + "<ows:Identifier>result</ows:Identifier>"
-                    + "</wps:Output>"
-                    + "<wps:Output>"
-                    + "<ows:Identifier>wfs-url</ows:Identifier>"
-                    + "</wps:Output>"
-                    + "<wps:Output>"
-                    + "<ows:Identifier>featuretype</ows:Identifier>"
-                    + "</wps:Output>"
-                    + "</wps:ResponseDocument>"
-                    + "</wps:ResponseForm>"
-                    + "</wps:Execute>").getBytes());
-        } finally {
-            IOUtils.closeQuietly(wpsRequestOutputStream);
-            IOUtils.closeQuietly(uploadedInputStream);
-        }
-        return wpsRequestFile;
     }
 }

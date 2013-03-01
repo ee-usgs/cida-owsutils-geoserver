@@ -151,7 +151,12 @@
             <version>1.3</version>
             <scope>test</scope>
         </dependency>
-        
+        <dependency>
+            <groupId>gov.usgs.cida</groupId>
+            <artifactId>dynamicProperties</artifactId>
+            <version>1.0.0</version>
+            <type>jar</type>
+        </dependency>
     </dependencies>
     
 </project>

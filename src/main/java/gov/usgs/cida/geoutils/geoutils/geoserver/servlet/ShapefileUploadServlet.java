@@ -1,14 +1,13 @@
 package gov.usgs.cida.geoutils.geoutils.geoserver.servlet;
 
 import gov.usgs.cida.config.DynamicReadOnlyProperties;
-import gov.usgs.cida.owsutils.commons.communication.RequestResponseHelper;
+import gov.usgs.cida.owsutils.commons.communication.RequestResponse;
 import gov.usgs.cida.owsutils.commons.io.FileHelper;
 import gov.usgs.cida.owsutils.commons.properties.JNDISingleton;
+import gov.usgs.cida.owsutils.commons.shapefile.ProjectionUtils;
 import it.geosolutions.geoserver.rest.GeoServerRESTManager;
 import it.geosolutions.geoserver.rest.GeoServerRESTPublisher;
 import it.geosolutions.geoserver.rest.GeoServerRESTPublisher.UploadMethod;
-import it.geosolutions.geoserver.rest.GeoServerRESTReader;
-import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder;
 import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder.ProjectionPolicy;
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -36,6 +35,7 @@ public class ShapefileUploadServlet extends HttpServlet {
     private static String geoserverUsername;
     private static String geoserverPassword;
     private static GeoServerRESTManager gsRestManager;
+    private static boolean useBaseCRSFailover;
     
     // Defaults
     private static String defaultWorkspaceName;
@@ -43,6 +43,7 @@ public class ShapefileUploadServlet extends HttpServlet {
     private static String defaultSRS;
     private static String defaultFilenameParam = "qqfile"; // Legacy to handle jquery fineuploader
     private static Integer defaultMaxFileSize = Integer.MAX_VALUE;
+    private static boolean defaultUseBaseCRSFallback = true;
 
     @Override
     public void init(ServletConfig servletConfig) throws ServletException {
@@ -148,9 +149,20 @@ public class ShapefileUploadServlet extends HttpServlet {
             defaultSRS = dsrsJndiProp;
         } else {
             defaultSRS = "";
-            LOG.warn("Default SRS is not defined. If a SRS name is not passed to during the request, the request will fail;");
+            LOG.warn("Default SRS is not defined. If a SRS name is not passed to during the request, the request will fail");
         }
         LOG.trace("Default SRS set to: " + defaultSRS);
+        
+        String bCRSfoInitParam = servletConfig.getInitParameter("geoserver-use-crs-failover");
+        String bCRSfoJndiProp = props.getProperty("geoserver-use-crs-failover");
+        if (StringUtils.isNotBlank(bCRSfoInitParam)) {
+            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoInitParam);
+        } else if (StringUtils.isNotBlank(bCRSfoJndiProp)) {
+            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoJndiProp);
+        } else {
+            useBaseCRSFailover = defaultUseBaseCRSFallback;
+        }
+        LOG.trace("Use base CRS failover set to: " + useBaseCRSFailover);
     }
 
     @Override
@@ -162,17 +174,17 @@ public class ShapefileUploadServlet extends HttpServlet {
     protected void doPost(HttpServletRequest request, HttpServletResponse response) throws ServletException, FileNotFoundException {
         Map<String, String> responseMap = new HashMap<String, String>();
 
-        RequestResponseHelper.ResponseType responseType = RequestResponseHelper.ResponseType.XML;
+        RequestResponse.ResponseType responseType = RequestResponse.ResponseType.XML;
         String responseEncoding = request.getParameter("response-encoding");
         if (StringUtils.isBlank(responseEncoding) || responseEncoding.toLowerCase().contains("json")) {
-            responseType = RequestResponseHelper.ResponseType.JSON;
+            responseType = RequestResponse.ResponseType.JSON;
         }
         LOG.trace("Response type set to " + responseType.toString());
 
         int fileSize = Integer.parseInt(request.getHeader("Content-Length"));
         if (fileSize > maxFileSize) {
             responseMap.put("error", "Upload exceeds max file size of " + maxFileSize + " bytes");
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
 
@@ -192,7 +204,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         if (StringUtils.isBlank(workspaceName)) {
             responseMap.put("error", "Parameter \"workspace\" is mandatory");
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
         LOG.trace("Workspace name set to " + workspaceName);
@@ -203,7 +215,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         if (StringUtils.isBlank(storeName)) {
             responseMap.put("error", "Parameter \"store\" is mandatory");
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
         LOG.trace("Store name set to " + storeName);
@@ -214,7 +226,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         if (StringUtils.isBlank(srsName)) {
             responseMap.put("error", "Parameter \"srs\" is mandatory");
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
         LOG.trace("SRS name set to " + srsName);
@@ -227,7 +239,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         LOG.trace("Layer name set to " + layerName);
         
         try {
-            RequestResponseHelper.saveFileFromRequest(request, shapeZipFile, filenameParam);
+            RequestResponse.saveFileFromRequest(request, shapeZipFile, filenameParam);
             LOG.trace("File saved to " + shapeZipFile.getPath());
 
             FileHelper.flattenZipFile(shapeZipFile.getPath());
@@ -241,60 +253,40 @@ public class ShapefileUploadServlet extends HttpServlet {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
             responseMap.put("exception", ex.getMessage());
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
+            return;
+        }
+        
+        String nativeSRS;
+        try {
+            nativeSRS = ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, useBaseCRSFailover);
+        } catch (Exception ex) {
+            LOG.warn(ex.getMessage());
+            responseMap.put("error", "Could not evince projection from shapefile");
+            responseMap.put("exception", ex.getMessage());
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
 
         try {
             GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
             
-//            // Do EPSG processing
-//        String declaredCRS = null;
-//        String nativeCRS = null;
-//        String warning = "";
-//        try {
-//            nativeCRS = new String(FileHelper.getByteArrayFromFile(new File(renamedPrjPath)));
-//            if (nativeCRS == null || nativeCRS.isEmpty()) {
-//                String errorMessage = "Error while getting Prj/WKT information from PRJ file. Function halted.";
-//                LOGGER.error(errorMessage);
-//                addError(errorMessage);
-//                throw new RuntimeException(errorMessage);
-//            }
-//            // The behavior of this method requires that the layer always force
-//            // projection from native to declared...
-//            declaredCRS = ShapeFileEPSGHelper.getDeclaredEPSGFromWKT(nativeCRS, false);
-//            if (declaredCRS == null || declaredCRS.isEmpty()) {
-//                declaredCRS = ShapeFileEPSGHelper.getDeclaredEPSGFromWKT(nativeCRS, true);
-//                warning = "Could not find EPSG code for prj definition. The geographic coordinate system '" + declaredCRS + "' will be used";
-//            } else if (declaredCRS.startsWith("ESRI:")) {
-//                declaredCRS = declaredCRS.replaceFirst("ESRI:", "EPSG:");
-//            }
-//            if (declaredCRS == null || declaredCRS.isEmpty()) {
-//                throw new RuntimeException("Could not attain EPSG code from shapefile. Please ensure proper projection and a valid PRJ file.");
-//            }
-//        } catch (Exception ex) {
-//            String errorMessage = "Error while getting EPSG information from PRJ file. Function halted.";
-//            LOGGER.error(errorMessage, ex);
-//            addError(errorMessage);
-//            throw new RuntimeException(errorMessage, ex);
-//        }
-            
             // Currently not doing any checks to see if workspace, store or layer already exist
-            Boolean success = gsPublisher.publishShp(workspaceName, storeName, null, layerName, UploadMethod.FILE, shapeZipFile.toURI(), srsName, "nativeSRS", ProjectionPolicy.NONE, null);
+            Boolean success = gsPublisher.publishShp(workspaceName, storeName, null, layerName, UploadMethod.FILE, shapeZipFile.toURI(), srsName, nativeSRS, ProjectionPolicy.NONE, null);
             
             if (success) {
                 LOG.debug("Shapefile has been imported successfully");
-                RequestResponseHelper.sendSuccessResponse(response, responseMap, responseType);
+                RequestResponse.sendSuccessResponse(response, responseMap, responseType);
             } else {
                 LOG.debug("Shapefile could not be imported successfully");
                 responseMap.put("error", "Shapefile could not be imported successfully");
-                RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+                RequestResponse.sendErrorResponse(response, responseMap, responseType);
             }
         } catch (Exception ex) {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
             responseMap.put("exception", ex.getMessage());
-            RequestResponseHelper.sendErrorResponse(response, responseMap, responseType);
+            RequestResponse.sendErrorResponse(response, responseMap, responseType);
         } finally {
             FileUtils.deleteQuietly(shapeZipFile);
         }

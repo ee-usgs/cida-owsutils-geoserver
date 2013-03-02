@@ -28,6 +28,7 @@ public class ShapefileUploadServlet extends HttpServlet {
     private static final long serialVersionUID = 1L;
     private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(ShapefileUploadServlet.class);
     private static DynamicReadOnlyProperties props = null;
+    private static String applicationName;
     private static Integer maxFileSize;
     private static String filenameParam;
     private static String geoserverEndpoint;
@@ -36,7 +37,9 @@ public class ShapefileUploadServlet extends HttpServlet {
     private static String geoserverPassword;
     private static GeoServerRESTManager gsRestManager;
     private static boolean useBaseCRSFailover;
-    
+    private static boolean overwriteExistingLayer;
+    // "reproject" (default), "force", "none"
+    private static ProjectionPolicy projectionPolicy;
     // Defaults
     private static String defaultWorkspaceName;
     private static String defaultStoreName;
@@ -44,14 +47,21 @@ public class ShapefileUploadServlet extends HttpServlet {
     private static String defaultFilenameParam = "qqfile"; // Legacy to handle jquery fineuploader
     private static Integer defaultMaxFileSize = Integer.MAX_VALUE;
     private static boolean defaultUseBaseCRSFallback = true;
+    private static boolean defaultOverwriteExistingLayer = false;
+    private static ProjectionPolicy defaultProjectionPolicy = ProjectionPolicy.REPROJECT_TO_DECLARED;
+    private static ServletConfig servletConfig;
 
     @Override
     public void init(ServletConfig servletConfig) throws ServletException {
         super.init();
+        ShapefileUploadServlet.servletConfig = servletConfig;
         props = JNDISingleton.getInstance();
 
-        String mfsInitParam = servletConfig.getInitParameter("max-file-size");
-        String mfsJndiProp = props.getProperty("max-file-size", "");
+        applicationName = servletConfig.getInitParameter("application-name");
+
+        // The maximum upload file size allowd by this server, 0 = Integer.MAX_VALUE
+        String mfsInitParam = servletConfig.getInitParameter("max.upload.file.size");
+        String mfsJndiProp = props.getProperty(applicationName + ".max.upload.file.size");
         if (StringUtils.isNotBlank(mfsInitParam)) {
             maxFileSize = Integer.parseInt(mfsInitParam);
         } else if (StringUtils.isNotBlank(mfsJndiProp)) {
@@ -59,21 +69,13 @@ public class ShapefileUploadServlet extends HttpServlet {
         } else {
             maxFileSize = defaultMaxFileSize;
         }
+        if (maxFileSize == 0) {
+            maxFileSize = defaultMaxFileSize;
+        }
         LOG.trace("Maximum allowable file size set to: " + maxFileSize + " bytes");
 
-        String fnInitParam = servletConfig.getInitParameter("filename-param");
-        String fnJndiProp = props.getProperty("filename-param", "");
-        if (StringUtils.isNotBlank(fnInitParam)) {
-            filenameParam = fnInitParam;
-        } else if (StringUtils.isNotBlank(fnJndiProp)) {
-            filenameParam = fnJndiProp;
-        } else {
-            filenameParam = defaultFilenameParam;
-        }
-        LOG.trace("Filename parameter set to: " + filenameParam);
-
-        String gsepInitParam = servletConfig.getInitParameter("geoserver-endpoint");
-        String gsepJndiProp = props.getProperty("geoserver-endpoint");
+        String gsepInitParam = servletConfig.getInitParameter("geoserver.endpoint");
+        String gsepJndiProp = props.getProperty(applicationName + ".geoserver.endpoint");
         if (StringUtils.isNotBlank(gsepInitParam)) {
             geoserverEndpoint = gsepInitParam;
         } else if (StringUtils.isNotBlank(gsepJndiProp)) {
@@ -89,8 +91,8 @@ public class ShapefileUploadServlet extends HttpServlet {
             throw new ServletException("Geoserver endpoint (" + geoserverEndpoint + ") could not be parsed into a valid URL.");
         }
 
-        String gsuserInitParam = servletConfig.getInitParameter("geoserver-username");
-        String gsuserJndiProp = props.getProperty("geoserver-username");
+        String gsuserInitParam = servletConfig.getInitParameter("geoserver.username");
+        String gsuserJndiProp = props.getProperty(applicationName + ".geoserver.username");
         if (StringUtils.isNotBlank(gsuserInitParam)) {
             geoserverUsername = gsepInitParam;
         } else if (StringUtils.isNotBlank(gsuserJndiProp)) {
@@ -100,7 +102,8 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         LOG.trace("Geoserver username set to: " + geoserverUsername);
 
-        String gspassJndiProp = props.getProperty("geoserver-password");
+        // This should only be coming from JNDI or JVM properties
+        String gspassJndiProp = props.getProperty(applicationName + ".geoserver.password");
         if (StringUtils.isNotBlank(gspassJndiProp)) {
             geoserverPassword = gsepJndiProp;
         } else {
@@ -117,8 +120,8 @@ public class ShapefileUploadServlet extends HttpServlet {
             throw new ServletException("Geoserver endpoint (" + geoserverEndpoint + ") could not be parsed into a valid URL.");
         }
 
-        String dwInitParam = servletConfig.getInitParameter("geoserver-default-workspace");
-        String dwJndiProp = props.getProperty("geoserver-default-workspace");
+        String dwInitParam = servletConfig.getInitParameter("default.workspace");
+        String dwJndiProp = props.getProperty(applicationName + ".default.workspace");
         if (StringUtils.isNotBlank(dwInitParam)) {
             defaultWorkspaceName = dwInitParam;
         } else if (StringUtils.isNotBlank(dwJndiProp)) {
@@ -129,8 +132,8 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         LOG.trace("Default workspace set to: " + defaultWorkspaceName);
 
-        String dsnInitParam = servletConfig.getInitParameter("geoserver-default-storename");
-        String dsnJndiProp = props.getProperty("geoserver-default-storename");
+        String dsnInitParam = servletConfig.getInitParameter("default.storename");
+        String dsnJndiProp = props.getProperty(applicationName + ".default.storename");
         if (StringUtils.isNotBlank(dsnInitParam)) {
             defaultStoreName = dwInitParam;
         } else if (StringUtils.isNotBlank(dsnJndiProp)) {
@@ -141,8 +144,8 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         LOG.trace("Default store name set to: " + defaultStoreName);
 
-        String dsrsInitParam = servletConfig.getInitParameter("geoserver-default-srs");
-        String dsrsJndiProp = props.getProperty("geoserver-default-srs");
+        String dsrsInitParam = servletConfig.getInitParameter("default.srs");
+        String dsrsJndiProp = props.getProperty(applicationName + ".default.srs");
         if (StringUtils.isNotBlank(dsrsInitParam)) {
             defaultSRS = dsrsInitParam;
         } else if (StringUtils.isNotBlank(dsrsJndiProp)) {
@@ -152,17 +155,6 @@ public class ShapefileUploadServlet extends HttpServlet {
             LOG.warn("Default SRS is not defined. If a SRS name is not passed to during the request, the request will fail");
         }
         LOG.trace("Default SRS set to: " + defaultSRS);
-        
-        String bCRSfoInitParam = servletConfig.getInitParameter("geoserver-use-crs-failover");
-        String bCRSfoJndiProp = props.getProperty("geoserver-use-crs-failover");
-        if (StringUtils.isNotBlank(bCRSfoInitParam)) {
-            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoInitParam);
-        } else if (StringUtils.isNotBlank(bCRSfoJndiProp)) {
-            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoJndiProp);
-        } else {
-            useBaseCRSFailover = defaultUseBaseCRSFallback;
-        }
-        LOG.trace("Use base CRS failover set to: " + useBaseCRSFailover);
     }
 
     @Override
@@ -175,7 +167,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         Map<String, String> responseMap = new HashMap<String, String>();
 
         RequestResponse.ResponseType responseType = RequestResponse.ResponseType.XML;
-        String responseEncoding = request.getParameter("response-encoding");
+        String responseEncoding = request.getParameter("response.encoding");
         if (StringUtils.isBlank(responseEncoding) || responseEncoding.toLowerCase().contains("json")) {
             responseType = RequestResponse.ResponseType.JSON;
         }
@@ -188,10 +180,35 @@ public class ShapefileUploadServlet extends HttpServlet {
             return;
         }
 
-        if (!StringUtils.isBlank(request.getParameter("filename-param"))) {
-            filenameParam = request.getParameter("filename-param");
-            LOG.trace("Based on incoming request, filename parameter re-set to: " + filenameParam);
+        // The key to search for in the upload form post to find the file
+        String fnInitParam = servletConfig.getInitParameter("filename.param");
+        String fnJndiProp = props.getProperty(applicationName + ".filename.param");
+        String fnReqParam = request.getParameter("filename.param");
+        if (StringUtils.isNotBlank(fnReqParam)) {
+            filenameParam = fnReqParam;
+        } else if (StringUtils.isNotBlank(fnInitParam)) {
+            filenameParam = fnInitParam;
+        } else if (StringUtils.isNotBlank(fnJndiProp)) {
+            filenameParam = fnJndiProp;
+        } else {
+            filenameParam = defaultFilenameParam;
         }
+        LOG.trace("Filename parameter set to: " + filenameParam);
+        
+        // The key to search for in the upload form post to find the file
+        String oelInitParam = servletConfig.getInitParameter("overwrite.existing.layer");
+        String oelJndiProp = props.getProperty(applicationName + ".overwrite.existing.layer");
+        String oelReqParam = request.getParameter("overwrite.existing.layer");
+        if (StringUtils.isNotBlank(oelReqParam)) {
+            overwriteExistingLayer = Boolean.parseBoolean(oelReqParam);
+        } else if (StringUtils.isNotBlank(oelInitParam)) {
+            overwriteExistingLayer = Boolean.parseBoolean(oelInitParam);
+        } else if (StringUtils.isNotBlank(oelJndiProp)) {
+            overwriteExistingLayer = Boolean.parseBoolean(oelJndiProp);
+        } else {
+            overwriteExistingLayer = defaultOverwriteExistingLayer;
+        }
+        LOG.trace("Overwrite existing layer set to: " + overwriteExistingLayer);
 
         String filename = request.getParameter(filenameParam);
         String tempDir = System.getProperty("java.io.tmpdir");
@@ -230,14 +247,14 @@ public class ShapefileUploadServlet extends HttpServlet {
             return;
         }
         LOG.trace("SRS name set to " + srsName);
-        
+
         String layerName = request.getParameter("layer");
         if (StringUtils.isBlank(layerName)) {
             layerName = filename.split(".")[0];
         }
         layerName = layerName.trim().replaceAll("\\.", "_").replaceAll(" ", "_");
         LOG.trace("Layer name set to " + layerName);
-        
+
         try {
             RequestResponse.saveFileFromRequest(request, shapeZipFile, filenameParam);
             LOG.trace("File saved to " + shapeZipFile.getPath());
@@ -256,6 +273,21 @@ public class ShapefileUploadServlet extends HttpServlet {
             RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
+
+        // Whether or not to use base CRS if native could not be found. efault true
+        String bCRSfoInitParam = servletConfig.getInitParameter("use.crs.failover");
+        String bCRSfoJndiProp = props.getProperty(applicationName + ".use.crs.failover");
+        String bCRSfoReqParam = request.getParameter("use.crs.failover");
+        if (StringUtils.isNotBlank(bCRSfoReqParam)) {
+            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoReqParam);
+        } else if (StringUtils.isNotBlank(bCRSfoInitParam)) {
+            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoInitParam);
+        } else if (StringUtils.isNotBlank(bCRSfoJndiProp)) {
+            useBaseCRSFailover = Boolean.parseBoolean(bCRSfoJndiProp);
+        } else {
+            useBaseCRSFailover = defaultUseBaseCRSFallback;
+        }
+        LOG.trace("Use base CRS failover set to: " + useBaseCRSFailover);
         
         String nativeSRS;
         try {
@@ -268,12 +300,54 @@ public class ShapefileUploadServlet extends HttpServlet {
             return;
         }
 
+        
+        String projectionPolicyReqParam = request.getParameter("projection.policy");
+        String ppInitParam = servletConfig.getInitParameter("geoserver.projection.policy");
+        String ppJndiProp = props.getProperty(applicationName + ".geoserver.projection.policy");
+        if (StringUtils.isNotBlank(projectionPolicyReqParam)) {
+            if (projectionPolicyReqParam.equalsIgnoreCase("reproject")) {
+                projectionPolicy = ProjectionPolicy.REPROJECT_TO_DECLARED;
+            } else if (projectionPolicyReqParam.equalsIgnoreCase("force")) {
+                projectionPolicy = ProjectionPolicy.FORCE_DECLARED;
+            } else {
+                projectionPolicy = defaultProjectionPolicy;
+            }
+        } else if (StringUtils.isNotBlank(ppInitParam)) {
+            if (ppInitParam.equalsIgnoreCase("reproject")) {
+                projectionPolicy = ProjectionPolicy.REPROJECT_TO_DECLARED;
+            } else if (ppInitParam.equalsIgnoreCase("force")) {
+                projectionPolicy = ProjectionPolicy.FORCE_DECLARED;
+            } else {
+                projectionPolicy = ProjectionPolicy.NONE;
+            }
+        } else if (StringUtils.isNotBlank(ppJndiProp)) {
+            if (ppJndiProp.equalsIgnoreCase("reproject")) {
+                projectionPolicy = ProjectionPolicy.REPROJECT_TO_DECLARED;
+            } else if (ppJndiProp.equalsIgnoreCase("force")) {
+                projectionPolicy = ProjectionPolicy.FORCE_DECLARED;
+            } else {
+                projectionPolicy = ProjectionPolicy.NONE;
+            }
+        } else {
+            projectionPolicy = defaultProjectionPolicy;
+        }
+        LOG.trace("Projection policy set to: " + projectionPolicy.name());
+        LOG.trace("Projection policy re-set to: " + projectionPolicy);
+
         try {
             GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
             
-            // Currently not doing any checks to see if workspace, store or layer already exist
-            Boolean success = gsPublisher.publishShp(workspaceName, storeName, null, layerName, UploadMethod.FILE, shapeZipFile.toURI(), srsName, nativeSRS, ProjectionPolicy.NONE, null);
+            if (overwriteExistingLayer) {
+                // TODO- Using this library, I am unable to rename a layer. If publishing the layer
+                // fails, we will have lost this layer due to removal here. 
+                gsPublisher.removeLayer(workspaceName, layerName);
+            }
             
+            // Currently not doing any checks to see if workspace, store or layer already exist
+            Boolean success = gsPublisher.publishShp(workspaceName, storeName, null, layerName, UploadMethod.FILE, shapeZipFile.toURI(), srsName, nativeSRS, projectionPolicy, null);
+            responseMap.put("name", layerName);
+            responseMap.put("workspace", workspaceName);
+            responseMap.put("store", storeName);
             if (success) {
                 LOG.debug("Shapefile has been imported successfully");
                 RequestResponse.sendSuccessResponse(response, responseMap, responseType);

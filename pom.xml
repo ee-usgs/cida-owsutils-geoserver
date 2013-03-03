@@ -13,6 +13,11 @@
         <name>Center for Integrated Data Analytics</name>
         <url>http://cida.usgs.gov</url>
     </organization>
+    
+    <ciManagement>
+        <url>http://igsarm-cida-hudson1.er.usgs.gov:8080/hudson/job/OWS%20Utils%20Geoserver/</url>
+        <system>Jenkins</system>
+    </ciManagement>
 	
     <licenses>
         <license>

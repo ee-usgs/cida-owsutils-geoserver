@@ -338,7 +338,10 @@ public class ShapefileUploadServlet extends HttpServlet {
             if (overwriteExistingLayer) {
                 // TODO- Using this library, I am unable to rename a layer. If publishing the layer
                 // fails, we will have lost this layer due to removal here. 
-                gsPublisher.removeLayer(workspaceName, layerName);
+                if (gsPublisher.unpublishFeatureType(workspaceName, storeName, layerName)) {
+                    gsPublisher.unpublishCoverage(workspaceName, storeName, layerName);
+                    gsPublisher.reloadStore(workspaceName, storeName, GeoServerRESTPublisher.StoreType.DATASTORES);
+                }
             }
 
             // Currently not doing any checks to see if workspace, store or layer already exist

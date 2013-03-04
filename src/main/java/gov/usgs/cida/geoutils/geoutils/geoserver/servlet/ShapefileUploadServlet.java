@@ -123,7 +123,7 @@ public class ShapefileUploadServlet extends HttpServlet {
             defaultWorkspaceName = dwInitParam;
         } else {
             defaultWorkspaceName = "";
-            LOG.warn("Default workspace is not defined. If a workspace is not passed to during the request, the request will fail;");
+            LOG.warn("Default workspace is not defined. If a workspace is not passed to during the request, the request will fail.");
         }
         LOG.trace("Default workspace set to: " + defaultWorkspaceName);
 
@@ -135,7 +135,7 @@ public class ShapefileUploadServlet extends HttpServlet {
             defaultStoreName = dwInitParam;
         } else {
             defaultStoreName = "";
-            LOG.warn("Default store name is not defined. If a store name is not passed to during the request, the request will fail;");
+            LOG.warn("Default store name is not defined. If a store name is not passed to during the request, the name of the layer will be used as the name of the store");
         }
         LOG.trace("Default store name set to: " + defaultStoreName);
 
@@ -215,6 +215,13 @@ public class ShapefileUploadServlet extends HttpServlet {
         File shapeZipFile = new File(tempDir + File.separator + filename);
         LOG.trace("Temporary file set to " + shapeZipFile.getPath());
 
+        String layerName = request.getParameter("layer");
+        if (StringUtils.isBlank(layerName)) {
+            layerName = filename.split("\\.")[0];
+        }
+        layerName = layerName.trim().replaceAll("\\.", "_").replaceAll(" ", "_");
+        LOG.trace("Layer name set to " + layerName);
+        
         String workspaceName = request.getParameter("workspace");
         if (StringUtils.isBlank(workspaceName)) {
             workspaceName = defaultWorkspaceName;
@@ -231,9 +238,7 @@ public class ShapefileUploadServlet extends HttpServlet {
             storeName = defaultStoreName;
         }
         if (StringUtils.isBlank(storeName)) {
-            responseMap.put("error", "Parameter \"store\" is mandatory");
-            RequestResponse.sendErrorResponse(response, responseMap, responseType);
-            return;
+            storeName = layerName;
         }
         LOG.trace("Store name set to " + storeName);
 
@@ -294,13 +299,6 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         LOG.trace("Projection policy set to: " + projectionPolicy.name());
         LOG.trace("Projection policy re-set to: " + projectionPolicy);
-
-        String layerName = request.getParameter("layer");
-        if (StringUtils.isBlank(layerName)) {
-            layerName = filename.split("\\.")[0];
-        }
-        layerName = layerName.trim().replaceAll("\\.", "_").replaceAll(" ", "_");
-        LOG.trace("Layer name set to " + layerName);
 
         try {
             RequestResponse.saveFileFromRequest(request, shapeZipFile, filenameParam);

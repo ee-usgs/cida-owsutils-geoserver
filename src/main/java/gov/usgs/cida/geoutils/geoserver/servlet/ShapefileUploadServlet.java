@@ -1,4 +1,4 @@
-package gov.usgs.cida.geoutils.geoutils.geoserver.servlet;
+package gov.usgs.cida.geoutils.geoserver.servlet;
 
 import gov.usgs.cida.config.DynamicReadOnlyProperties;
 import gov.usgs.cida.owsutils.commons.communication.RequestResponse;

@@ -14,6 +14,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 import javax.servlet.ServletConfig;
@@ -54,12 +55,21 @@ public class ShapefileUploadServlet extends HttpServlet {
 
         applicationName = servletConfig.getInitParameter("application.name");
 
+        Enumeration<String> initParameterNames = servletConfig.getInitParameterNames();
+        while (initParameterNames.hasMoreElements()) {
+            String initPKey = initParameterNames.nextElement();
+            if (StringUtils.isBlank(props.getProperty(applicationName + "." + initPKey))) {
+                String initPVal = servletConfig.getInitParameter(initPKey);
+                if (StringUtils.isNotBlank(initPVal)) {
+                    LOG.debug("Could not find JNDI property for " + applicationName + "." + initPKey + ". Substituting the value from web.xml");
+                    props.setProperty(applicationName + "." + initPKey, initPVal);
+                }
+            }
+        }
+
         // The maximum upload file size allowd by this server, 0 = Integer.MAX_VALUE
-        String mfsInitParam = servletConfig.getInitParameter("max.upload.file.size");
         String mfsJndiProp = props.getProperty(applicationName + ".max.upload.file.size");
-        if (StringUtils.isNotBlank(mfsInitParam)) {
-            maxFileSize = Integer.parseInt(mfsInitParam);
-        } else if (StringUtils.isNotBlank(mfsJndiProp)) {
+        if (StringUtils.isNotBlank(mfsJndiProp)) {
             maxFileSize = Integer.parseInt(mfsJndiProp);
         } else {
             maxFileSize = defaultMaxFileSize;
@@ -69,11 +79,8 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         LOG.debug("Maximum allowable file size set to: " + maxFileSize + " bytes");
 
-        String gsepInitParam = servletConfig.getInitParameter("geoserver.endpoint");
         String gsepJndiProp = props.getProperty(applicationName + ".geoserver.endpoint");
-        if (StringUtils.isNotBlank(gsepInitParam)) {
-            geoserverEndpoint = gsepInitParam;
-        } else if (StringUtils.isNotBlank(gsepJndiProp)) {
+        if (StringUtils.isNotBlank(gsepJndiProp)) {
             geoserverEndpoint = gsepJndiProp;
         } else {
             throw new ServletException("Geoserver endpoint is not defined.");
@@ -86,11 +93,8 @@ public class ShapefileUploadServlet extends HttpServlet {
             throw new ServletException("Geoserver endpoint (" + geoserverEndpoint + ") could not be parsed into a valid URL.");
         }
 
-        String gsuserInitParam = servletConfig.getInitParameter("geoserver.username");
         String gsuserJndiProp = props.getProperty(applicationName + ".geoserver.username");
-        if (StringUtils.isNotBlank(gsuserInitParam)) {
-            geoserverUsername = gsuserInitParam;
-        } else if (StringUtils.isNotBlank(gsuserJndiProp)) {
+        if (StringUtils.isNotBlank(gsuserJndiProp)) {
             geoserverUsername = gsuserJndiProp;
         } else {
             throw new ServletException("Geoserver username is not defined.");
@@ -115,35 +119,26 @@ public class ShapefileUploadServlet extends HttpServlet {
             throw new ServletException("Geoserver endpoint (" + geoserverEndpoint + ") could not be parsed into a valid URL.");
         }
 
-        String dwInitParam = servletConfig.getInitParameter("default.upload.workspace");
         String dwJndiProp = props.getProperty(applicationName + ".default.upload.workspace");
-        if (StringUtils.isNotBlank(dwInitParam)) {
-            defaultWorkspaceName = dwInitParam;
-        } else if (StringUtils.isNotBlank(dwJndiProp)) {
-            defaultWorkspaceName = dwInitParam;
+        if (StringUtils.isNotBlank(dwJndiProp)) {
+            defaultWorkspaceName = dwJndiProp;
         } else {
             defaultWorkspaceName = "";
             LOG.warn("Default workspace is not defined. If a workspace is not passed to during the request, the request will fail.");
         }
         LOG.debug("Default workspace set to: " + defaultWorkspaceName);
 
-        String dsnInitParam = servletConfig.getInitParameter("default.upload.storename");
         String dsnJndiProp = props.getProperty(applicationName + ".default.upload.storename");
-        if (StringUtils.isNotBlank(dsnInitParam)) {
-            defaultStoreName = dwInitParam;
-        } else if (StringUtils.isNotBlank(dsnJndiProp)) {
-            defaultStoreName = dwInitParam;
+        if (StringUtils.isNotBlank(dsnJndiProp)) {
+            defaultStoreName = dsnJndiProp;
         } else {
             defaultStoreName = "";
             LOG.warn("Default store name is not defined. If a store name is not passed to during the request, the name of the layer will be used as the name of the store");
         }
         LOG.debug("Default store name set to: " + defaultStoreName);
 
-        String dsrsInitParam = servletConfig.getInitParameter("default.srs");
         String dsrsJndiProp = props.getProperty(applicationName + ".default.srs");
-        if (StringUtils.isNotBlank(dsrsInitParam)) {
-            defaultSRS = dsrsInitParam;
-        } else if (StringUtils.isNotBlank(dsrsJndiProp)) {
+        if (StringUtils.isNotBlank(dsrsJndiProp)) {
             defaultSRS = dsrsJndiProp;
         } else {
             defaultSRS = "";
@@ -221,7 +216,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         layerName = layerName.trim().replaceAll("\\.", "_").replaceAll(" ", "_");
         LOG.debug("Layer name set to " + layerName);
-        
+
         String workspaceName = request.getParameter("workspace");
         if (StringUtils.isBlank(workspaceName)) {
             workspaceName = defaultWorkspaceName;

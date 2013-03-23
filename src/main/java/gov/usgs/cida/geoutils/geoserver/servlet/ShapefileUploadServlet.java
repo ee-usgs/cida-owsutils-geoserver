@@ -82,6 +82,9 @@ public class ShapefileUploadServlet extends HttpServlet {
         String gsepJndiProp = props.getProperty(applicationName + ".geoserver.endpoint");
         if (StringUtils.isNotBlank(gsepJndiProp)) {
             geoserverEndpoint = gsepJndiProp;
+            if (geoserverEndpoint.endsWith("/")) {
+                geoserverEndpoint = geoserverEndpoint.substring(0, geoserverEndpoint.length() - 1);
+            }
         } else {
             throw new ServletException("Geoserver endpoint is not defined.");
         }

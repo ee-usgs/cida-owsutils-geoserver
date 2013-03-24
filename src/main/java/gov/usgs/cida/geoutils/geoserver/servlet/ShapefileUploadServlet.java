@@ -1,5 +1,6 @@
 package gov.usgs.cida.geoutils.geoserver.servlet;
 
+import com.sun.xml.internal.messaging.saaj.packaging.mime.MessagingException;
 import gov.usgs.cida.config.DynamicReadOnlyProperties;
 import gov.usgs.cida.owsutils.commons.communication.RequestResponse;
 import gov.usgs.cida.owsutils.commons.io.FileHelper;
@@ -10,9 +11,12 @@ import it.geosolutions.geoserver.rest.GeoServerRESTPublisher;
 import it.geosolutions.geoserver.rest.GeoServerRESTPublisher.UploadMethod;
 import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder.ProjectionPolicy;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -20,8 +24,18 @@ import java.util.Map;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.*;
+import org.apache.commons.codec.binary.Base64OutputStream;
+import org.apache.commons.httpclient.NameValuePair;
 import org.apache.commons.io.FileUtils;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang.StringUtils;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.AbstractHttpEntity;
+import org.apache.http.entity.InputStreamEntity;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.util.EntityUtils;
 import org.slf4j.LoggerFactory;
 
 public class ShapefileUploadServlet extends HttpServlet {
@@ -341,7 +355,7 @@ public class ShapefileUploadServlet extends HttpServlet {
             }
 
             // Currently not doing any checks to see if workspace, store or layer already exist
-            Boolean success = gsPublisher.publishShp(workspaceName, storeName, null, layerName, UploadMethod.FILE, shapeZipFile.toURI(), srsName, nativeCRS, projectionPolicy, null);
+            Boolean success = restImport(workspaceName, storeName, null, layerName, shapeZipFile.toURI(), srsName, nativeCRS, projectionPolicy, null);
             if (success) {
                 LOG.debug("Shapefile has been imported successfully");
                 responseMap.put("name", layerName);
@@ -349,9 +363,13 @@ public class ShapefileUploadServlet extends HttpServlet {
                 responseMap.put("store", storeName);
                 RequestResponse.sendSuccessResponse(response, responseMap, responseType);
             } else {
-                LOG.debug("Shapefile could not be imported successfully");
-                responseMap.put("error", "Shapefile could not be imported successfully");
-                RequestResponse.sendErrorResponse(response, responseMap, responseType);
+                // Try again using WPS
+                success = importUsingWPS(workspaceName, storeName,layerName, shapeZipFile.toURI(), srsName);
+                if (!success) {
+                    LOG.debug("Shapefile could not be imported successfully");
+                    responseMap.put("error", "Shapefile could not be imported successfully");
+                    RequestResponse.sendErrorResponse(response, responseMap, responseType);
+                }
             }
         } catch (Exception ex) {
             LOG.warn(ex.getMessage());
@@ -360,6 +378,114 @@ public class ShapefileUploadServlet extends HttpServlet {
             RequestResponse.sendErrorResponse(response, responseMap, responseType);
         } finally {
             FileUtils.deleteQuietly(shapeZipFile);
+        }
+    }
+
+    private boolean restImport(String workspaceName, String storeName, NameValuePair[] storeParams, String layerName, URI shapefile, String srsName, String nativeCRS, ProjectionPolicy projectionPolicy, String defaultStyle) throws FileNotFoundException {
+        GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
+        return gsPublisher.publishShp(workspaceName, storeName, storeParams, layerName, UploadMethod.FILE, shapefile, srsName, nativeCRS, projectionPolicy, defaultStyle);
+    }
+
+    private Boolean importUsingWPS(String workspaceName, String storeName, String layerName, URI shapefile, String srsName) throws IOException, MessagingException {
+
+        FileOutputStream wpsRequestOutputStream = null;
+        FileInputStream uploadedInputStream = null;
+
+        File wpsRequestFile = File.createTempFile("wps.upload.", ".xml");
+        wpsRequestFile.deleteOnExit();
+        try {
+
+            wpsRequestOutputStream = new FileOutputStream(wpsRequestFile);
+            uploadedInputStream = new FileInputStream(new File(shapefile));
+
+            wpsRequestOutputStream.write(new String(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+                    + "<wps:Execute service=\"WPS\" version=\"1.0.0\" "
+                    + "xmlns:wps=\"http://www.opengis.net/wps/1.0.0\" "
+                    + "xmlns:ows=\"http://www.opengis.net/ows/1.1\" "
+                    + "xmlns:xlink=\"http://www.w3.org/1999/xlink\" "
+                    + "xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" "
+                    + "xsi:schemaLocation=\"http://www.opengis.net/wps/1.0.0 "
+                    + "http://schemas.opengis.net/wps/1.0.0/wpsExecute_request.xsd\">"
+                    + "<ows:Identifier>gs:Import</ows:Identifier>"
+                    + "<wps:DataInputs>"
+                    + "<wps:Input>"
+                    + "<ows:Identifier>features</ows:Identifier>"
+                    + "<wps:Data>"
+                    + "<wps:ComplexData mimeType=\"application/zip\"><![CDATA[").getBytes());
+            IOUtils.copy(uploadedInputStream, new Base64OutputStream(wpsRequestOutputStream, true, 0, null));
+            wpsRequestOutputStream.write(new String(
+                    "]]></wps:ComplexData>"
+                    + "</wps:Data>"
+                    + "</wps:Input>"
+                    + "<wps:Input>"
+                    + "<ows:Identifier>workspace</ows:Identifier>"
+                    + "<wps:Data>"
+                    + "<wps:LiteralData>" + workspaceName + "</wps:LiteralData>"
+                    + "</wps:Data>"
+                    + "</wps:Input>"
+                    + "<wps:Input>"
+                    + "<ows:Identifier>store</ows:Identifier>"
+                    + "<wps:Data>"
+                    + "<wps:LiteralData>" + storeName + "</wps:LiteralData>"
+                    + "</wps:Data>"
+                    + "</wps:Input>"
+                    + "<wps:Input>"
+                    + "<ows:Identifier>name</ows:Identifier>"
+                    + "<wps:Data>"
+                    + "<wps:LiteralData>" + layerName + "</wps:LiteralData>"
+                    + "</wps:Data>"
+                    + "</wps:Input>"
+                     + "<wps:Input>"
+                    + "<ows:Identifier>srs</ows:Identifier>"
+                    + "<wps:Data>"
+                    + "<wps:LiteralData>" + srsName + "</wps:LiteralData>"
+                    + "</wps:Data>"
+                    + "</wps:Input>"
+                    + "<wps:Input>"
+                    + "<ows:Identifier>srsHandling</ows:Identifier>"
+                    + "<wps:Data>"
+                    + "<wps:LiteralData>REPROJECT_TO_DECLARED</wps:LiteralData>"
+                    + "</wps:Data>"
+                    + "</wps:Input>"
+                    + "</wps:DataInputs>"
+                    + "<wps:ResponseForm>"
+                    + "<wps:RawDataOutput>"
+                    + "<ows:Identifier>layerName</ows:Identifier>"
+                    + "</wps:RawDataOutput>"
+                    + "</wps:ResponseForm>"
+                    + "</wps:Execute>").getBytes());
+        } finally {
+            IOUtils.closeQuietly(wpsRequestOutputStream);
+            IOUtils.closeQuietly(uploadedInputStream);
+        }
+
+        String url = geoserverEndpointURL.toString();
+        
+        return postToWPS(url + (url.endsWith("/") ? "" : "/" )+ "wps/WebProcessingService?Service=WPS&Request=execute&identifier=gs:Import", wpsRequestFile).contains(layerName);
+    }
+
+    private String postToWPS(String url, File wpsRequestFile) throws IOException, MessagingException {
+        HttpPost post;
+        HttpClient httpClient = new DefaultHttpClient();
+
+        post = new HttpPost(url);
+
+        FileInputStream wpsRequestInputStream = null;
+        try {
+            wpsRequestInputStream = new FileInputStream(wpsRequestFile);
+
+            AbstractHttpEntity entity = new InputStreamEntity(wpsRequestInputStream, wpsRequestFile.length());
+
+            post.setEntity(entity);
+
+            HttpResponse response = httpClient.execute(post);
+
+            return EntityUtils.toString(response.getEntity());
+
+        } finally {
+            IOUtils.closeQuietly(wpsRequestInputStream);
+            FileUtils.deleteQuietly(wpsRequestFile);
         }
     }
 }

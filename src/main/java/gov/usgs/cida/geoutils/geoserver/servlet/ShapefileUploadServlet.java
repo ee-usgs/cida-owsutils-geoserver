@@ -1,6 +1,5 @@
 package gov.usgs.cida.geoutils.geoserver.servlet;
 
-import com.sun.xml.internal.messaging.saaj.packaging.mime.MessagingException;
 import gov.usgs.cida.config.DynamicReadOnlyProperties;
 import gov.usgs.cida.owsutils.commons.communication.RequestResponse;
 import gov.usgs.cida.owsutils.commons.io.FileHelper;
@@ -386,7 +385,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         return gsPublisher.publishShp(workspaceName, storeName, storeParams, layerName, UploadMethod.FILE, shapefile, srsName, nativeCRS, projectionPolicy, defaultStyle);
     }
 
-    private Boolean importUsingWPS(String workspaceName, String storeName, String layerName, URI shapefile, String srsName) throws IOException, MessagingException {
+    private Boolean importUsingWPS(String workspaceName, String storeName, String layerName, URI shapefile, String srsName) throws IOException {
 
         FileOutputStream wpsRequestOutputStream = null;
         FileInputStream uploadedInputStream = null;
@@ -465,7 +464,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         return postToWPS(url + (url.endsWith("/") ? "" : "/" )+ "wps/WebProcessingService?Service=WPS&Request=execute&identifier=gs:Import", wpsRequestFile).contains(layerName);
     }
 
-    private String postToWPS(String url, File wpsRequestFile) throws IOException, MessagingException {
+    private String postToWPS(String url, File wpsRequestFile) throws IOException {
         HttpPost post;
         HttpClient httpClient = new DefaultHttpClient();
 

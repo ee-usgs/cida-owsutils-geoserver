@@ -4,11 +4,10 @@ import gov.usgs.cida.config.DynamicReadOnlyProperties;
 import gov.usgs.cida.owsutils.commons.communication.RequestResponse;
 import gov.usgs.cida.owsutils.commons.io.FileHelper;
 import gov.usgs.cida.owsutils.commons.properties.JNDISingleton;
-import gov.usgs.cida.owsutils.commons.shapefile.ProjectionUtils;
 import it.geosolutions.geoserver.rest.GeoServerRESTManager;
 import it.geosolutions.geoserver.rest.GeoServerRESTPublisher;
-import it.geosolutions.geoserver.rest.GeoServerRESTPublisher.UploadMethod;
 import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder.ProjectionPolicy;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -23,10 +22,13 @@ import java.util.Map;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
 import javax.servlet.http.*;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import org.apache.commons.codec.binary.Base64OutputStream;
-import org.apache.commons.httpclient.NameValuePair;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
+import org.apache.commons.jxpath.JXPathContext;
 import org.apache.commons.lang.StringUtils;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
@@ -36,6 +38,9 @@ import org.apache.http.entity.InputStreamEntity;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.util.EntityUtils;
 import org.slf4j.LoggerFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Node;
+import org.xml.sax.SAXException;
 
 public class ShapefileUploadServlet extends HttpServlet {
 
@@ -221,7 +226,13 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         LOG.debug("Overwrite existing layer set to: " + overwriteExistingLayer);
 
-        String filename = request.getParameter(filenameParam);
+        LOG.debug("Cleaning file name.\nWas: " + filenameParam);
+        String filename = cleanFileName(request.getParameter(filenameParam));
+        LOG.debug("Is: " + filename);
+        if (filenameParam.equals(filename)) {
+            LOG.debug("(No change)");
+        }
+
         String tempDir = System.getProperty("java.io.tmpdir");
         File shapeZipFile = new File(tempDir + File.separator + filename);
         LOG.debug("Temporary file set to " + shapeZipFile.getPath());
@@ -330,17 +341,7 @@ public class ShapefileUploadServlet extends HttpServlet {
             return;
         }
 
-        String nativeCRS;
-        try {
-            nativeCRS = ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, useBaseCRSFailover);
-        } catch (Exception ex) {
-            LOG.warn(ex.getMessage());
-            responseMap.put("error", "Could not evince projection from shapefile");
-            responseMap.put("exception", ex.getMessage());
-            RequestResponse.sendErrorResponse(response, responseMap, responseType);
-            return;
-        }
-
+        String importResponse = "";
         try {
             GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
 
@@ -353,23 +354,21 @@ public class ShapefileUploadServlet extends HttpServlet {
                 }
             }
 
-            // Currently not doing any checks to see if workspace, store or layer already exist
-            Boolean success = restImport(workspaceName, storeName, null, layerName, shapeZipFile.toURI(), srsName, nativeCRS, projectionPolicy, null);
-            if (success) {
+            importResponse = importUsingWPS(workspaceName, storeName, layerName, shapeZipFile.toURI(), srsName, projectionPolicy, null);
+            
+            if (importResponse.toLowerCase().contains("exception")) {
+                String error = parseWPSErrorText(importResponse);
+                LOG.debug("Shapefile could not be imported successfully");
+                responseMap.put("error", error);
+                RequestResponse.sendErrorResponse(response, responseMap, responseType);
+            } else {
                 LOG.debug("Shapefile has been imported successfully");
                 responseMap.put("name", layerName);
                 responseMap.put("workspace", workspaceName);
                 responseMap.put("store", storeName);
                 RequestResponse.sendSuccessResponse(response, responseMap, responseType);
-            } else {
-                // Try again using WPS
-                success = importUsingWPS(workspaceName, storeName,layerName, shapeZipFile.toURI(), srsName);
-                if (!success) {
-                    LOG.debug("Shapefile could not be imported successfully");
-                    responseMap.put("error", "Shapefile could not be imported successfully");
-                    RequestResponse.sendErrorResponse(response, responseMap, responseType);
-                }
             }
+            
         } catch (Exception ex) {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
@@ -378,15 +377,10 @@ public class ShapefileUploadServlet extends HttpServlet {
         } finally {
             FileUtils.deleteQuietly(shapeZipFile);
         }
+
     }
 
-    private boolean restImport(String workspaceName, String storeName, NameValuePair[] storeParams, String layerName, URI shapefile, String srsName, String nativeCRS, ProjectionPolicy projectionPolicy, String defaultStyle) throws FileNotFoundException {
-        GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
-        return gsPublisher.publishShp(workspaceName, storeName, storeParams, layerName, UploadMethod.FILE, shapefile, srsName, nativeCRS, projectionPolicy, defaultStyle);
-    }
-
-    private Boolean importUsingWPS(String workspaceName, String storeName, String layerName, URI shapefile, String srsName) throws IOException {
-
+    private String importUsingWPS(String workspaceName, String storeName, String layerName, URI shapefile, String srsName, ProjectionPolicy projectionPolicy, String styleName) throws IOException {
         FileOutputStream wpsRequestOutputStream = null;
         FileInputStream uploadedInputStream = null;
 
@@ -435,7 +429,7 @@ public class ShapefileUploadServlet extends HttpServlet {
                     + "<wps:LiteralData>" + layerName + "</wps:LiteralData>"
                     + "</wps:Data>"
                     + "</wps:Input>"
-                     + "<wps:Input>"
+                    + "<wps:Input>"
                     + "<ows:Identifier>srs</ows:Identifier>"
                     + "<wps:Data>"
                     + "<wps:LiteralData>" + srsName + "</wps:LiteralData>"
@@ -444,10 +438,24 @@ public class ShapefileUploadServlet extends HttpServlet {
                     + "<wps:Input>"
                     + "<ows:Identifier>srsHandling</ows:Identifier>"
                     + "<wps:Data>"
-                    + "<wps:LiteralData>REPROJECT_TO_DECLARED</wps:LiteralData>"
+                    + "<wps:LiteralData>" + projectionPolicy + "</wps:LiteralData>"
                     + "</wps:Data>"
-                    + "</wps:Input>"
-                    + "</wps:DataInputs>"
+                    + "</wps:Input>").getBytes());
+
+            // TODO- Not yet implemented
+            if (StringUtils.isNotBlank(styleName)) {
+                wpsRequestOutputStream.write(new String(
+                        "<wps:Input>"
+                        + "<ows:Identifier>styleName</ows:Identifier>"
+                        + "<wps:Data>"
+                        + "<wps:LiteralData>" + styleName + "</wps:LiteralData>"
+                        + "</wps:Data>"
+                        + "</wps:Input>").getBytes());
+
+            }
+
+            wpsRequestOutputStream.write(new String(
+                    "</wps:DataInputs>"
                     + "<wps:ResponseForm>"
                     + "<wps:RawDataOutput>"
                     + "<ows:Identifier>layerName</ows:Identifier>"
@@ -460,8 +468,8 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
 
         String url = geoserverEndpointURL.toString();
-        
-        return postToWPS(url + (url.endsWith("/") ? "" : "/" )+ "wps/WebProcessingService?Service=WPS&Request=execute&identifier=gs:Import", wpsRequestFile).contains(layerName);
+
+        return postToWPS(url + (url.endsWith("/") ? "" : "/") + "wps/WebProcessingService?Service=WPS&Request=execute&identifier=gs:Import", wpsRequestFile);
     }
 
     private String postToWPS(String url, File wpsRequestFile) throws IOException {
@@ -486,5 +494,36 @@ public class ShapefileUploadServlet extends HttpServlet {
             IOUtils.closeQuietly(wpsRequestInputStream);
             FileUtils.deleteQuietly(wpsRequestFile);
         }
+    }
+
+    private String parseWPSErrorText(String xml) throws ParserConfigurationException, SAXException, IOException {
+        DocumentBuilderFactory dbFactory = DocumentBuilderFactory.newInstance();
+        dbFactory.setValidating(false);
+        DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
+        Document doc = dBuilder.parse(new ByteArrayInputStream(xml.getBytes()));
+        doc.getDocumentElement().normalize();
+
+        JXPathContext ctx = JXPathContext.newContext(doc);
+        Node errorNode = (Node) ctx.selectSingleNode("ows:ExceptionReport/ows:Exception/ows:ExceptionText");
+        return errorNode.getChildNodes().item(0).getTextContent();
+    }
+
+    private String cleanFileName(String input) {
+        String updated = "";
+
+        // Test the first character and if numeric, prepend with underscore
+        if (input.substring(0, 1).matches("[0-9]")) {
+            updated = "_" + input;
+        }
+
+        // Test the rest of the characters and replace anything that's not a 
+        // letter, digit or period with an underscore
+        char[] inputArr = updated.toCharArray();
+        for (int cInd = 0; cInd < inputArr.length; cInd++) {
+            if (!Character.isLetterOrDigit(inputArr[cInd]) && !(inputArr[cInd] == '.')) {
+                inputArr[cInd] = '_';
+            }
+        }
+        return String.valueOf(inputArr);
     }
 }

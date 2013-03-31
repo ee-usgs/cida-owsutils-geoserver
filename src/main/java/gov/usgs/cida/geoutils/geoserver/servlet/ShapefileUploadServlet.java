@@ -363,7 +363,7 @@ public class ShapefileUploadServlet extends HttpServlet {
                 RequestResponse.sendErrorResponse(response, responseMap, responseType);
             } else {
                 LOG.debug("Shapefile has been imported successfully");
-                responseMap.put("name", layerName);
+                responseMap.put("name", importResponse);
                 responseMap.put("workspace", workspaceName);
                 responseMap.put("store", storeName);
                 RequestResponse.sendSuccessResponse(response, responseMap, responseType);
@@ -504,12 +504,12 @@ public class ShapefileUploadServlet extends HttpServlet {
         doc.getDocumentElement().normalize();
 
         JXPathContext ctx = JXPathContext.newContext(doc);
-        Node errorNode = (Node) ctx.selectSingleNode("ows:ExceptionReport/ows:Exception/ows:ExceptionText");
+        Node errorNode = (Node) ctx.selectSingleNode("//ows:ExceptionReport/ows:Exception/ows:ExceptionText");
         return errorNode.getChildNodes().item(0).getTextContent();
     }
 
     private String cleanFileName(String input) {
-        String updated = "";
+        String updated = input;
 
         // Test the first character and if numeric, prepend with underscore
         if (input.substring(0, 1).matches("[0-9]")) {

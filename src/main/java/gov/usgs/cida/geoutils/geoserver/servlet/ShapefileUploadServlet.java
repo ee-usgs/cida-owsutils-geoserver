@@ -4,6 +4,7 @@ import gov.usgs.cida.config.DynamicReadOnlyProperties;
 import gov.usgs.cida.owsutils.commons.communication.RequestResponse;
 import gov.usgs.cida.owsutils.commons.io.FileHelper;
 import gov.usgs.cida.owsutils.commons.properties.JNDISingleton;
+import gov.usgs.cida.owsutils.commons.shapefile.ProjectionUtils;
 import it.geosolutions.geoserver.rest.GeoServerRESTManager;
 import it.geosolutions.geoserver.rest.GeoServerRESTPublisher;
 import it.geosolutions.geoserver.rest.encoder.GSResourceEncoder.ProjectionPolicy;
@@ -328,10 +329,8 @@ public class ShapefileUploadServlet extends HttpServlet {
 
             FileHelper.flattenZipFile(shapeZipFile.getPath());
             LOG.debug("Zip file directory structure flattened");
-
-            if (!FileHelper.validateShapefileZip(shapeZipFile)) {
-                throw new IOException("Unable to verify shapefile. Upload failed.");
-            }
+            
+            FileHelper.validateShapefileZip(shapeZipFile);
             LOG.debug("Zip file seems to be a valid shapefile");
         } catch (Exception ex) {
             LOG.warn(ex.getMessage());
@@ -340,8 +339,18 @@ public class ShapefileUploadServlet extends HttpServlet {
             RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
+        
+//        try {
+//            String nativeCRS = ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, false);
+//        } catch (Exception ex) {
+//            LOG.warn(ex.getMessage());
+//            responseMap.put("error", "Could not evince projection from shapefile");
+//            responseMap.put("exception", ex.getMessage());
+//            RequestResponse.sendErrorResponse(response, responseMap, responseType);
+//            return;
+//        }
 
-        String importResponse = "";
+        String importResponse;
         try {
             GeoServerRESTPublisher gsPublisher = gsRestManager.getPublisher();
 

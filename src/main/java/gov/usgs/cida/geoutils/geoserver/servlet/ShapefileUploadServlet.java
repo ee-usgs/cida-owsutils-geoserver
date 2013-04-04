@@ -340,15 +340,11 @@ public class ShapefileUploadServlet extends HttpServlet {
             return;
         }
         
-//        try {
-//            String nativeCRS = ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, false);
-//        } catch (Exception ex) {
-//            LOG.warn(ex.getMessage());
-//            responseMap.put("error", "Could not evince projection from shapefile");
-//            responseMap.put("exception", ex.getMessage());
-//            RequestResponse.sendErrorResponse(response, responseMap, responseType);
-//            return;
-//        }
+        try {
+            ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, false);
+        } catch (Exception ex) {
+            responseMap.put("warning", "WARNING: Could not find EPSG code for prj definition. The geographic coordinate system '"+srsName+"' will be used ");
+        }
 
         String importResponse;
         try {

@@ -59,9 +59,9 @@
     </distributionManagement>
     
     <scm>
-        <connection>scm:git:http://github.com/USGS-CIDA/cida-owsutils-commons.git</connection>
-        <developerConnection>scm:git:ssh://git@github.com/USGS-CIDA/cida-owsutils-commons.git</developerConnection>
-        <url>https://github.com/USGS-CIDA/cida-owsutils-commons</url>
+        <connection>scm:git:http://github.com/USGS-CIDA/cida-owsutils-geoserver.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/USGS-CIDA/cida-owsutils-geoserver.git</developerConnection>
+        <url>https://github.com/USGS-CIDA/cida-owsutils-geoserver</url>
     </scm>
     
     

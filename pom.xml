@@ -83,7 +83,7 @@
         <dependency>
             <groupId>gov.usgs.cida.owsutils</groupId>
             <artifactId>cida-owsutils-commons</artifactId>
-            <version>${project.version}</version>
+            <version>1.0.1-SNAPSHOT</version>
             <type>jar</type>
         </dependency>
         

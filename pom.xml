@@ -45,17 +45,17 @@
     </properties>
 	
     <distributionManagement>
-        <repository>
-            <id>cida-releases</id>
-            <name>CIDA Releases</name>
-            <url>http://internal.cida.usgs.gov/maven/content/repositories/cida-releases/</url>
-        </repository>
-        <snapshotRepository>
-            <id>cida-snapshots</id>
-            <name>CIDA Snapshots</name>
-            <url>http://internal.cida.usgs.gov/maven/content/repositories/cida-snapshots/</url>
-        </snapshotRepository>
-    </distributionManagement>
+		<repository>
+			<id>cida-public-releases</id>
+			<name>CIDA Public Releases</name>
+			<url>http://internal.cida.usgs.gov/maven/content/repositories/cida-public-releases/</url>
+		</repository>
+		<snapshotRepository>
+			<id>cida-public-snapshots</id>
+			<name>CIDA Public Snapshots</name>
+			<url>http://internal.cida.usgs.gov/maven/content/repositories/cida-public-snapshots/</url>
+		</snapshotRepository>
+	</distributionManagement>
     
     <scm>
         <connection>scm:git:http://github.com/USGS-CIDA/cida-owsutils-geoserver.git</connection>
@@ -68,10 +68,15 @@
     
     <repositories>
         <repository>
-            <id>nexus</id>
-            <name>CIDA Nexus</name>
-            <url>http://internal.cida.usgs.gov/maven/content/groups/public/</url>
-        </repository>
+			<id>cida-public</id>
+			<name>CIDA Public Nexus</name>
+			<url>http://cida.usgs.gov/maven/cida-public/</url>
+		</repository>
+        <repository>
+			<id>opengeo</id>
+			<name>OpenGeo</name>
+			<url>http://repo.opengeo.org</url>
+		</repository>
         <repository>
             <id>geosolutions</id>
             <name>GeoSolutions</name>
@@ -83,7 +88,7 @@
         <dependency>
             <groupId>gov.usgs.cida.owsutils</groupId>
             <artifactId>cida-owsutils-commons</artifactId>
-            <version>1.0.1</version>
+            <version>1.0.3</version>
             <type>jar</type>
         </dependency>
         
@@ -158,7 +163,7 @@
         <dependency>
             <groupId>gov.usgs.cida</groupId>
             <artifactId>dynamicProperties</artifactId>
-            <version>1.0.0</version>
+            <version>1.0.1</version>
             <type>jar</type>
         </dependency>
         <dependency>

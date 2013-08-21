@@ -341,7 +341,7 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
         
         try {
-            ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, false);
+            srsName = ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, false);
         } catch (Exception ex) {
             responseMap.put("warning", "WARNING: Could not find EPSG code for prj definition. The geographic coordinate system '"+srsName+"' will be used ");
         }

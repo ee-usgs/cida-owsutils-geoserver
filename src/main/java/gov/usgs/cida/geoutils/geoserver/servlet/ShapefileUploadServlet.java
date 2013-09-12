@@ -326,12 +326,12 @@ public class ShapefileUploadServlet extends HttpServlet {
         try {
             RequestResponse.saveFileFromRequest(request, shapeZipFile, filenameParam);
             LOG.debug("File saved to " + shapeZipFile.getPath());
-            
-			//Each of these steps can be overridden
-			shapeZipFile = cleanUploadedFile(shapeZipFile);
-			validateUploadedFile(shapeZipFile);			//throws exception if invalid
-			shapeZipFile = transformUploadedFile(shapeZipFile);
 
+            FileHelper.flattenZipFile(shapeZipFile.getPath());
+            LOG.debug("Zip file directory structure flattened");
+            
+            FileHelper.validateShapefileZip(shapeZipFile);
+            LOG.debug("Zip file seems to be a valid shapefile");
         } catch (Exception ex) {
             LOG.warn(ex.getMessage());
             responseMap.put("error", "Unable to upload file");
@@ -339,7 +339,7 @@ public class ShapefileUploadServlet extends HttpServlet {
             RequestResponse.sendErrorResponse(response, responseMap, responseType);
             return;
         }
-		
+        
         try {
             srsName = ProjectionUtils.getProjectionFromShapefileZip(shapeZipFile, false);
         } catch (Exception ex) {
@@ -384,55 +384,6 @@ public class ShapefileUploadServlet extends HttpServlet {
         }
 
     }
-	
-	
-	/**
-	 * Hook to allow subclasses to clean the upload prior to checking validation.
-	 * 
-	 * By default this implementation flattens the directory structure via
-	 * FileHelper.flattenZipFile().
-	 * 
-	 * If overriding, be sure to delete the old file if you create a new one.
-	 * 
-	 * @param shapefileZip
-	 * @return A reference to the updated shapefile zip.
-	 */
-	protected File cleanUploadedFile(File shapefileZip) throws IOException {
-		FileHelper.flattenZipFile(shapefileZip.getPath());
-		LOG.debug("Zip file directory structure flattened");
-		
-		//Flattening is done in place, so just return the same reference
-		return shapefileZip;
-	}
-	
-	/**
-	 * Checks that the upload file is valid, after it is cleaned (cleanUploadedFile).
-	 * 
-	 * If the file is valid, null is returned.  If invalid, an Exception is returned.
-	 * 
-	 * @param shapefileZip
-	 * @return An Exception if invalid, null otherwise.
-	 */
-	protected void validateUploadedFile(File shapefileZip) throws Exception {
-		FileHelper.validateShapefileZip(shapefileZip);
-		LOG.debug("Zip file seems to be a valid shapefile");
-	}
-	
-	/**
-	 * Hook to allow subclasses to process the upload prior to importing as a layer.
-	 * 
-	 * If overriding, be sure to delete the old file if you create a new one.
-	 * 
-	 * The default implementation just returns the passed in File.
-	 * 
-	 * @param shapefileZip
-	 * @return A reference to the updated shapefile zip.
-	 */
-	protected File transformUploadedFile(File shapefileZip) throws Exception {
-		return shapefileZip;
-	}
-	
-	
 
     private String importUsingWPS(String workspaceName, String storeName, String layerName, URI shapefile, String srsName, ProjectionPolicy projectionPolicy, String styleName) throws IOException {
         FileOutputStream wpsRequestOutputStream = null;
